@@ -1,6 +1,7 @@
 import React from "react";
 // ffmpeg stuff
 import { createFFmpeg, fetchFile } from "@ffmpeg/ffmpeg";
+import Image from "next/image";
 const ffmpeg = createFFmpeg({
   log: true,
 });
@@ -10,24 +11,35 @@ type StoreState = {
   frames: Frame[];
   count: number;
 };
+type Action = {
+  type: string;
+  frame?: Frame;
+  index?: number;
+};
 
 const framesInitialState: StoreState = {
   frames: [],
   count: 0,
 };
 
-function framesReducer(state: any, action: any) {
+function framesReducer(state: StoreState, action: Action): StoreState {
   switch (action.type) {
     case "ADD_FRAME": {
-      return {
-        frames: [...state.frames, action.frame],
-        count: state.count + 1,
-      };
+      if (action.frame) {
+        return {
+          frames: [...state.frames, action.frame],
+          count: state.count + 1,
+        };
+      }
+      return state;
     }
     case "REMOVE_FRAME": {
-      const frames = [...state.frames];
-      frames.splice(action.index, 1);
-      return { frames, count: state.count - 1 };
+      if (action.index) {
+        const frames = [...state.frames];
+        frames.splice(action.index, 1);
+        return { frames, count: state.count - 1 };
+      }
+      return state;
     }
     case "RESET": {
       return framesInitialState;
@@ -43,9 +55,10 @@ function Frames(props: { frames: Frame[] }) {
     <div className="mb-4 overflow-scroll">
       <div className="flex gap-2 overflow-scroll">
         {props.frames.map((frame, index) => (
-          <img
+          <Image
             width="100"
             height="100"
+            alt={`frame-${index}`}
             className="rounded-lg border-2 border-solid"
             src={URL.createObjectURL(frame)}
             key={`frame[${index}]`}
@@ -86,6 +99,7 @@ function Home() {
     board.current.toBlob((blob) => {
       if (!board.current) return;
       if (!ctx.current) return;
+      if (!blob) return;
 
       dispatch({ type: "ADD_FRAME", frame: blob });
       ctx.current.fillRect(0, 0, board.current.width, board.current.height);
@@ -126,37 +140,47 @@ function Home() {
     mouse.current = { x, y, down: false };
   };
 
-  const createGif = async () => {
+  const createGif = () => {
     if (!ready) return;
 
-    const inputFiles = [];
-    for (let index = 0; index < state.count; index++) {
-      const file = new File([state.frames[index]], `frame-${index}.png`, {
-        type: "image/png",
-      });
-      ffmpeg.FS("writeFile", file.name, await fetchFile(file));
-      inputFiles.push("-i");
-      inputFiles.push(file.name);
+    async function handleGifCreation() {
+      try {
+        const inputFiles = [];
+        for (let index = 0; index < state.count; index++) {
+          const blob = state.frames[index];
+          if (blob) {
+            const file = new File([blob], `frame-${index}.png`, {
+              type: "image/png",
+            });
+            ffmpeg.FS("writeFile", file.name, await fetchFile(file));
+            inputFiles.push("-i");
+            inputFiles.push(file.name);
+          }
+        }
+
+        await ffmpeg.run(
+          "-f",
+          "image2",
+          "-framerate",
+          "10",
+          "-i",
+          "frame-%1d.png",
+          "out.gif"
+        );
+
+        // Read the result
+        const data = ffmpeg.FS("readFile", "out.gif");
+        // Create a URL
+        const url = URL.createObjectURL(
+          new Blob([data.buffer], { type: "image/gif" })
+        );
+        console.log(url);
+        setGif(url);
+      } catch (error) {
+        throw Error("Something went wrong.");
+      }
     }
-
-    await ffmpeg.run(
-      "-f",
-      "image2",
-      "-framerate",
-      "10",
-      "-i",
-      "frame-%1d.png",
-      "out.gif"
-    );
-
-    // Read the result
-    const data = ffmpeg.FS("readFile", "out.gif");
-    // Create a URL
-    const url = URL.createObjectURL(
-      new Blob([data.buffer], { type: "image/gif" })
-    );
-    console.log(url);
-    setGif(url);
+    handleGifCreation().catch((error) => console.error(error));
   };
 
   const load = async () => {
@@ -165,8 +189,11 @@ function Home() {
   };
 
   React.useEffect(() => {
-    load();
-    setupBoard();
+    load()
+      .then(() => {
+        setupBoard();
+      })
+      .catch((error) => console.error(error));
   }, []);
 
   return (
@@ -196,9 +223,11 @@ function Home() {
         <Frames frames={state.frames} />
 
         {gif && (
-          <img
+          <Image
             src={gif}
+            alt="animated-gif-drawing"
             width="250"
+            height="250"
             className="m-auto mb-4 rounded-lg border-2 border-solid"
           />
         )}
